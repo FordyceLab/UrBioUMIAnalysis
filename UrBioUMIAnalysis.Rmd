@@ -1,0 +1,168 @@
+---
+title: "UrBioUMI Analysis"
+author: "Tyler Shimko"
+date: "11/18/2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(ggplot2)
+library(data.table)
+library(tidyr)
+```
+
+## UrBio
+
+```{r data_load}
+data <- fread("~/UMI_master.txt")
+
+reads_per_bc <- data %>% group_by(barcode) %>% summarize(total_count = n())
+
+unique_reads <- data %>% group_by(barcode, umi, up_flank, down_flank) %>%
+  summarize(count = n()) %>% group_by(barcode) %>% summarize(unique_count = n())
+
+read_counts <- left_join(reads_per_bc, unique_reads) %>%
+  filter(as.numeric(barcode) < 9) %>%
+  mutate(frac_unique = unique_count / total_count, barcode = as.numeric(barcode))
+
+read_counts_melt <- read_counts %>%
+  gather(read_type, count, -barcode, -frac_unique)
+
+barcode <- 1:8
+concentrations <- c(10^-8, 10^-9, 10^-10, 10^-11, 10^-12, 10^-13, 10^-14, 10^-15)
+concs <- data.frame(barcode, concentrations)
+
+read_counts <- left_join(read_counts, concs, copy = TRUE)
+```
+
+## Analysis
+
+```{r read_count_plots}
+ggplot(read_counts_melt, aes(x = barcode, y = count, fill = read_type)) +
+  geom_bar(stat = "identity", position = "dodge")
+ggplot(read_counts, aes(x = total_count, y = unique_count)) +
+  geom_point() +
+  stat_smooth(method = "lm")
+```
+```{r model}
+summary(lm(unique_count ~ total_count, data = read_counts))
+summary(lm(unique_count ~ I(total_count^(1/3)), data = read_counts))
+```
+
+```{r}
+ggplot(read_counts, aes(x = log10(concentrations), y = frac_unique)) + geom_point()
+```
+
+```{r}
+summary(lm(frac_unique~log10(concentrations), data = read_counts))
+```
+
+```{r}
+umis_per_flank <- data %>%
+  group_by(barcode, umi, up_flank, down_flank) %>%
+  summarize(count = n()) %>% 
+  filter(barcode < 9)
+
+ggplot(umis_per_flank, aes(x = count)) + geom_histogram() + facet_wrap(~barcode, nrow = 2)
+
+non_unique_reads <- umis_per_flank %>%
+  filter(count > 1) %>%
+  group_by(barcode) %>%
+  summarise(count = n()) %>% 
+  left_join(., read_counts) %>% 
+  mutate(norm_non_unique = count / (total_count / 10^6))
+
+ggplot(non_unique_reads, aes(x = as.factor(barcode), y = norm_non_unique)) +
+  geom_point() +
+  xlab("Barcode") +
+  ylab("Reads with duplicates per million reads") +
+  stat_smooth(method = "lm")
+
+non_unique_reads_total <- umis_per_flank %>%
+  filter(count > 1) %>%
+  group_by(barcode) %>%
+  summarise(count = sum(count)) %>% 
+  left_join(., read_counts) %>% 
+  mutate(norm_non_unique = count / (total_count / 10^6))
+
+ggplot(non_unique_reads_total, aes(x = as.factor(barcode), y = norm_non_unique)) +
+  geom_point() +
+  xlab("Barcode") +
+  ylab("Total non-unique reads per million reads") +
+  stat_smooth(method = "lm")
+```
+
+```{r}
+flank_per_umi <- data %>%
+  group_by(barcode, umi) %>%
+  distinct() %>%
+  group_by(barcode, umi) %>% 
+  summarize(count = n()) %>% 
+  filter(barcode < 9)
+
+ggplot(flank_per_umi, aes(x = count)) + geom_histogram() + facet_wrap(~barcode, nrow = 2)
+```
+
+```{r}
+unique_umis <- data %>% group_by(barcode, umi) %>% summarise(count = n()) %>% 
+  group_by(barcode) %>% summarize(count = n()) %>% filter(barcode < 9)
+ggplot(unique_umis, aes(x = barcode, y = count)) + geom_point()
+
+unique_umi_per_reads <- left_join(unique_umis, read_counts) %>%
+  mutate(norm_unique_umi = count / (total_count / 10^6)) %>%
+  select(barcode, norm_unique_umi)
+
+ggplot(unique_umi_per_reads, aes(x = as.factor(barcode), y = norm_unique_umi)) +
+  geom_point() +
+  xlab("Barcode") +
+  ylab("Unique UMIs per million total reads")
+```
+
+```{r}
+flank_per_umi <- data %>%
+  group_by(barcode, umi) %>%
+  distinct() %>%
+  group_by(umi) %>% 
+  summarise(count = n())
+
+flank_per_tp <- data %>%
+  group_by(barcode, up_flank, down_flank) %>%
+  distinct() %>%
+  group_by(barcode) %>% 
+  summarise(count = n()) %>%
+  filter(barcode < 9)
+
+barcode <- 1:8
+concentrations <- c(10^-8, 10^-9, 10^-10, 10^-11, 10^-12, 10^-13, 10^-14, 10^-15)
+theo_max <- function(conc) {
+  ((conc * 6.022*10^23) / 10^6) * 2
+}
+
+theoretical_max <- theo_max(concentrations)
+
+maxs <- data.frame(barcode, concentrations, theoretical_max)
+
+flank_per_tp <- left_join(flank_per_tp, maxs, copy = TRUE) %>% gather("count", "value", count, theoretical_max)
+
+ggplot(flank_per_tp, aes(x = barcode, y = log10(value), color = count)) + geom_point() +
+  xlab("Barcode") + ylab("Unique flanking sequences observed") +
+  ggtitle("Unique flanking seqs observed in each barcode") +
+  scale_colour_manual(values = c("black","red"))
+
+unique_flanks_per_depth <- left_join(read_counts, flank_per_tp, copy = TRUE)
+
+ggplot(unique_flanks_per_depth, aes(x = total_count, y = count)) +
+  geom_point() +
+  xlab("Total reads in barcode") +
+  ylab("Unique flanking sequences observed")
+
+unique_umis_per_depth <- left_join(read_counts, unique_umis, copy = TRUE)
+
+ggplot(unique_umis_per_depth, aes(x = total_count, y = count)) +
+  geom_point() +
+  xlab("Total reads in barcode") +
+  ylab("Unique flanking sequences observed")
+```
+
+
