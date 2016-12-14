@@ -15,7 +15,7 @@ library(tidyr)
 ## UrBio
 
 ```{r data_load}
-data <- fread("~/UMI_master.txt")
+data <- fread("~/UrBioUMIAnalysis/UMI_master.txt")
 
 reads_per_bc <- data %>% group_by(barcode) %>% summarize(total_count = n())
 
@@ -126,8 +126,10 @@ flank_per_umi <- data %>%
   group_by(umi) %>% 
   summarise(count = n())
 
+test <- data %>% filter(barcode == 8) %>% group_by(up_flank, down_flank) %>% summarize(count = n())
+
 flank_per_tp <- data %>%
-  group_by(barcode, up_flank, down_flank) %>%
+  group_by(barcode, umi, up_flank, down_flank) %>%
   distinct() %>%
   group_by(barcode) %>% 
   summarise(count = n()) %>%
